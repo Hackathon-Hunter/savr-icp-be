@@ -1,19 +1,24 @@
-// Types.mo - Common types for the Zap system
-
 import Principal "mo:base/Principal";
 import Nat "mo:base/Nat";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
-import TokenTypes "./TokenTypes";
+import Blob "mo:base/Blob";
+import Nat64 "mo:base/Nat64";
 
 module {
-    // Account types - reuse from TokenTypes
-    public type Account = TokenTypes.Account;
+    // ===== ICRC-1 Standard Types =====
+    public type Account = {
+        owner : Principal;
+        subaccount : ?Blob;
+    };
 
-    // Token types
-    public type TransferResult = {
-        #Ok : Nat;
-        #Err : TransferError;
+    public type TransferArgs = {
+        from_subaccount : ?Blob;
+        to : Account;
+        amount : Nat;
+        fee : ?Nat;
+        memo : ?Blob;
+        created_at_time : ?Nat64;
     };
 
     public type TransferError = {
@@ -27,39 +32,65 @@ module {
         #GenericError : { error_code : Nat; message : Text };
     };
 
-    public type TokenInfo = TokenTypes.TokenInfo;
-
-    public type TokenTransferResult = TokenTypes.TransferResult;
-
-    // Token interface
-    public type TokenActor = actor {
-        // ICRC-1 functions
-        icrc1_name : () -> async Text;
-        icrc1_symbol : () -> async Text;
-        icrc1_decimals : () -> async Nat8;
-        icrc1_fee : () -> async Nat;
-        icrc1_total_supply : () -> async Nat;
-        icrc1_balance_of : (Account) -> async Nat;
-        icrc1_metadata : () -> async [(Text, { #Nat : Nat; #Int : Int; #Text : Text; #Blob : [Nat8] })];
-
-        // Admin functions
-        mint : (Principal, Nat) -> async TokenTransferResult;
-        burn : (Principal, Nat) -> async TokenTransferResult;
+    public type TransferResult = {
+        #Ok : Nat;
+        #Err : TransferError;
     };
 
-    // Transaction types
-    public type Transaction = {
-        id : Nat;
-        from : Account;
-        to : Account;
-        amount : Nat;
-        tokenSymbol : Text;
-        timestamp : Int;
-        status : TransactionStatus;
-        transactionType : TransactionType;
-        reference : ?Text;
-        memo : ?[Nat8];
+    // ===== ICP Ledger Types =====
+    public type ICP = {
+        e8s : Nat64;
     };
+
+    public type ICPTransferArgs = {
+        memo : Nat64;
+        amount : ICP;
+        fee : ICP;
+        from_subaccount : ?Blob;
+        to : Text;
+        created_at_time : ?{ timestamp_nanos : Nat64 };
+    };
+
+    public type ICPTransferResult = {
+        #Ok : Nat64;
+        #Err : ICPTransferError;
+    };
+
+    public type ICPTransferError = {
+        #BadFee : { expected_fee : ICP };
+        #InsufficientFunds : { balance : ICP };
+        #TxTooOld : { allowed_window_nanos : Nat64 };
+        #TxCreatedInFuture;
+        #TxDuplicate : { duplicate_of : Nat64 };
+    };
+
+    // ===== Saving Types =====
+    public type SavingId = Nat;
+
+    public type Saving = {
+        id : SavingId;
+        principalId : Principal;
+        savingName : Text;
+        amount : Nat64; // e8s format
+        totalSaving : Nat64; // target amount in e8s
+        currentAmount : Nat64; // current saved amount in e8s
+        deadline : Int; // timestamp
+        createdAt : Int;
+        updatedAt : Int;
+        status : SavingStatus;
+        savingsRate : Nat; // percentage rate
+        priorityLevel : Nat; // priority level (1-10 or similar)
+        isStaking : Bool; // whether this saving is staking
+    };
+
+    public type SavingStatus = {
+        #Active;
+        #Completed;
+        #Cancelled;
+    };
+
+    // ===== Transaction Types =====
+    public type TransactionId = Nat;
 
     public type TransactionStatus = {
         #Pending;
@@ -68,21 +99,81 @@ module {
     };
 
     public type TransactionType = {
-        #Transfer;
-        #Mint;
-        #Burn;
-        #MerchantTransfer;
+        #Saving;
+        #TopUp;
     };
 
-    // Merchant types
-    public type MerchantData = {
-        name : ?Text;
-        email : ?Text;
-        location : ?Text;
-        businessType : ?Text;
-        icpAddress : ?Text;
-        website : ?Text;
-        phoneNumber : ?Text;
-        registrationDate : ?Int;
+    public type Transaction = {
+        id : TransactionId;
+        from : Principal;
+        to : Principal;
+        amount : Nat64; // e8s format
+        timestamp : Int;
+        status : TransactionStatus;
+        transactionType : TransactionType;
+        savingId : ?SavingId;
+        memo : ?Text;
+        blockIndex : ?Nat64; // ICP ledger block index
     };
-} 
+
+    // ===== Request Types =====
+    public type StartSavingRequest = {
+        amount : Nat64; // e8s format
+        savingName : Text;
+        deadline : Int; // timestamp
+        principalId : Text;
+        totalSaving : Nat64; // e8s format
+        savingsRate : ?Nat; // optional percentage rate
+        priorityLevel : ?Nat; // optional priority level (1-10 or similar)
+        isStaking : ?Bool; // optional whether this saving is staking
+    };
+
+    public type TopUpRequest = {
+        principalId : Text;
+        savingId : SavingId;
+        amount : Nat64; // e8s format
+    };
+
+    public type UpdateSavingRequest = {
+        savingId : SavingId;
+        savingName : ?Text; // optional new saving name
+        deadline : ?Int; // optional new deadline timestamp
+        totalSaving : ?Nat64; // optional new target amount in e8s format
+        savingsRate : ?Nat; // optional percentage rate
+        priorityLevel : ?Nat; // optional priority level (1-10 or similar)
+        isStaking : ?Bool; // optional whether this saving is staking
+    };
+
+    // ===== Extended Types =====
+    public type TopUpHistory = {
+        date : Int;
+        amount : Nat64;
+    };
+
+    public type SavingWithHistory = {
+        id : SavingId;
+        principalId : Principal;
+        savingName : Text;
+        amount : Nat64; // e8s format
+        totalSaving : Nat64; // target amount in e8s
+        currentAmount : Nat64; // current saved amount in e8s
+        deadline : Int; // timestamp
+        createdAt : Int;
+        updatedAt : Int;
+        status : SavingStatus;
+        savingsRate : Nat; // percentage rate
+        priorityLevel : Nat; // priority level (1-10 or similar)
+        isStaking : Bool; // whether this saving is staking
+        topUpHistory : [TopUpHistory];
+    };
+
+    // ===== Response Types =====
+    public type Result<T, E> = {
+        #Ok : T;
+        #Err : E;
+    };
+
+    public type SavingResponse = Result<Saving, Text>;
+    public type TransactionResponse = Result<Transaction, Text>;
+    public type SavingWithHistoryResponse = Result<SavingWithHistory, Text>;
+};

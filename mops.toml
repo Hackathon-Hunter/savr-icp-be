@@ -1,4 +1,9 @@
 # Motoko dependencies (https://mops.one/)
 
+[package]
+name = "saving-manager"
+version = "0.1.0"
+description = "ICP Savings Manager Application"
+
 [dependencies]
-base = "0.14.1"
+base = "0.8.7"

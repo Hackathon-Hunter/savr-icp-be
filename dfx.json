@@ -1,36 +1,25 @@
 {
-  "version": 1,
   "canisters": {
-    "ckIdr": {
-      "type": "motoko",
-      "main": "src/Token.mo"
-    },
-    "ckUsd": {
-      "type": "motoko", 
-      "main": "src/Token.mo"
-    },
-    "zapManager": {
-      "type": "motoko",
-      "main": "src/ZapManager.mo"
+    "saving_manager": {
+      "main": "src/SavingManager.mo",
+      "type": "motoko"
     }
   },
+  "defaults": {
+    "build": {
+      "packtool": "mops sources"
+    }
+  },
+  "dfx": "0.14.1",
   "networks": {
     "local": {
-      "bind": "127.0.0.1:8001",
+      "bind": "127.0.0.1:8000",
       "type": "ephemeral"
     },
     "ic": {
       "providers": ["https://icp0.io"],
       "type": "persistent"
-    },
-    "playground": {
-      "type": "persistent",
-      "providers": ["https://icp0.io"]
     }
   },
-  "defaults": {
-    "build": {
-      "packtool": ""
-    }
-  }
+  "version": 1
 }
