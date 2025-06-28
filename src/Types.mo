@@ -238,7 +238,34 @@ module {
     public type TransactionResponse = Result<Transaction, Text>;
     public type SavingWithHistoryResponse = Result<SavingWithHistory, Text>;
 
+    // ===== HTTP OutCall Types =====
+    public type HttpRequestArgs = {
+        url : Text;
+        max_response_bytes : ?Nat64;
+        headers : [{ name : Text; value : Text }];
+        body : ?[Nat8];
+        method : { #get; #head; #post };
+        transform : ?{
+            function : shared query { response : HttpResponse; context : Blob } -> async HttpResponse;
+            context : Blob;
+        };
+    };
 
-    
+    public type HttpResponsePayload = {
+        status : Nat;
+        headers : [{ name : Text; value : Text }];
+        body : [Nat8];
+    };
 
+    public type HttpResponse = HttpResponsePayload;
+
+    // ===== Cycles Management Types =====
+    public type CyclesInfo = {
+        balance : Nat;
+        available : Nat;
+        threshold : Nat;
+        needsTopUp : Bool;
+        estimatedRemainingDays : ?Float;
+        cyclesPerDay : ?Nat;
+    };
 };
