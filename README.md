@@ -1,4 +1,4 @@
-# ICP Savings Manager
+# zap-x-icp - ICP Savings Manager
 
 A decentralized savings application built on the Internet Computer Protocol (ICP) that allows users to create savings goals, top up their savings, and track progress toward their financial goals.
 
@@ -9,77 +9,140 @@ A decentralized savings application built on the Internet Computer Protocol (ICP
 - Track progress toward savings goals
 - Cancel savings if needed
 - Standardized ICP token handling using ICRC-1 standards
-
-## Technical Implementation
-
-The application follows Internet Computer standards and best practices:
-
-- Uses ICRC-1 token standard for ICP token transfers
-- Implements standardized account representation
-- Handles transaction fees properly (0.0001 ICP per transaction)
-- Provides utility functions for ICP amount conversion and formatting
-- Simple ownership model for canister management
+- Admin dashboard for management
 
 ## Project Structure
 
-- `src/SavingManager.mo`: Main canister implementing the savings functionality
-- `src/Types.mo`: Type definitions for savings, transactions, and ICP-related data
-- `src/Utils.mo`: Utility functions for ICP conversion, formatting, and validation
+```
+zap-x-icp/
+├── src/
+│   ├── SavingManager.mo    # Main canister implementing savings functionality
+│   ├── Types.mo            # Type definitions for savings and transactions
+│   ├── Utils.mo            # Utility functions for ICP conversion and validation
+│   └── declarations/       # Auto-generated .did files and bindings
+├── admin-dashboard/        # Frontend admin interface
+├── scripts/               # Deployment and utility scripts
+├── dfx.json              # DFX configuration
+├── mops.toml             # Motoko package manager config
+└── canister_ids.json     # Canister ID mappings
+```
 
-## Setup and Deployment
+## Prerequisites
 
-### Prerequisites
+- [DFX SDK](https://internetcomputer.org/install.sh) (version 0.14.1 or higher)
+- [Node.js](https://nodejs.org/) (version 16 or higher)
+- [MOPS Package Manager](https://mops.one/) for Motoko dependencies
+- ICP tokens for mainnet deployment
 
-- [DFX SDK](https://internetcomputer.org/docs/current/developer-docs/build/install-dfx) (version 0.14.1 or higher)
-- [Node.js](https://nodejs.org/) (version 14 or higher)
-- [MOPS Package Manager](https://mops.one/) for Motoko
+## Setup and Installation
 
-### Local Development
+### 1. Install DFX (if not already installed)
 
-1. Clone the repository and navigate to the project directory:
+```bash
+# Install dfx
+sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
+
+# Load environment variables
+source "$HOME/Library/Application Support/org.dfinity.dfx/env"
+
+# Verify installation
+dfx --version
+```
+
+### 2. Clone and Setup Project
 
 ```bash
 git clone <repository-url>
-cd icp-savings-manager
-```
+cd zap-x-icp
 
-2. Install dependencies:
-
-```bash
+# Install dependencies
 npm install
 mops install
 ```
 
-3. Start a local Internet Computer replica:
+### 3. Setup DFX Identity
 
 ```bash
-dfx start --clean --background
+# Create a new identity (recommended for mainnet)
+dfx identity new secure-mainnet --storage-mode=password-protected
+
+# Use the identity
+dfx identity use secure-mainnet
+
+# Get your account ID for receiving ICP
+dfx ledger account-id
 ```
 
-4. Deploy the application locally:
+## Local Development
+
+### Start Local Development Environment
 
 ```bash
+# Start local Internet Computer replica
+dfx start --clean --background
+
+# Create canisters
+dfx canister create --all
+
+# Build the project (generates .did files)
+dfx build
+
+# Deploy locally
 dfx deploy
 ```
 
-### Using the Application
-
-After deployment, you can interact with the canister using:
+### Check Local Deployment
 
 ```bash
-# Start a new saving
-dfx canister call saving_manager startSaving '(record { amount = 100_000_000 : nat64; savingName = "Vacation"; deadline = 1714696949000000000 : int; principalId = "YOUR_PRINCIPAL_ID"; totalSaving = 500_000_000 : nat64 })'
+# Check canister status
+dfx canister status --all
 
-# Top up an existing saving
-dfx canister call saving_manager topUpSaving '(record { principalId = "YOUR_PRINCIPAL_ID"; savingId = 0 : nat; amount = 50_000_000 : nat64 })'
+# Get local canister URLs
+dfx canister id saving_manager
+# Access at: http://localhost:4943/?canisterId=<canister_id>
+```
 
-# Get user's savings
-dfx canister call saving_manager getUserSavings '("YOUR_PRINCIPAL_ID")'
+## Mainnet Deployment
+
+### 1. Top Up ICP Balance
+
+**Get your account ID:**
+```bash
+dfx ledger account-id
+```
+
+**Transfer ICP from exchange/wallet to your account ID**
+
+**Check your balance:**
+```bash
+dfx ledger balance --network ic
+```
+
+### 2. Convert ICP to Cycles
+
+```bash
+# Convert ICP to cycles (example: 0.1 ICP)
+dfx cycles convert --amount 0.1 --network ic
+
+# Check cycles balance
+dfx wallet balance --network ic
+```
+
+### 3. Deploy to Mainnet
+
+```bash
+# Deploy to Internet Computer mainnet
+dfx deploy --network ic
+
+# Check mainnet deployment
+dfx canister status --all --network ic
+
+# Get mainnet URLs
+dfx canister id saving_manager --network ic
+# Access at: https://<canister_id>.icp0.io
 ```
 
 ## API Reference
-
-The canister exposes the following public methods:
 
 ### Query Methods
 
@@ -104,174 +167,83 @@ The canister exposes the following public methods:
 - `icrc1_fee(): Nat` - Get the transaction fee
 - `icrc1_transfer(args: TransferArgs): TransferResult` - Transfer tokens (owner only)
 
-### Owner Methods
+## Usage Examples
 
-- `getOwner(): Principal` - Get the owner
-- `transferOwnership(newOwner: Principal): Bool` - Transfer ownership (owner only)
+### Start a New Saving
+
+```bash
+dfx canister call saving_manager startSaving '(record { 
+  amount = 100_000_000 : nat64; 
+  savingName = "Vacation Fund"; 
+  deadline = 1714696949000000000 : int; 
+  principalId = "YOUR_PRINCIPAL_ID"; 
+  totalSaving = 500_000_000 : nat64 
+})'
+```
+
+### Top Up an Existing Saving
+
+```bash
+dfx canister call saving_manager topUpSaving '(record { 
+  principalId = "YOUR_PRINCIPAL_ID"; 
+  savingId = 0 : nat; 
+  amount = 50_000_000 : nat64 
+})'
+```
+
+### Get User's Savings
+
+```bash
+dfx canister call saving_manager getUserSavings '("YOUR_PRINCIPAL_ID")'
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**1. dfx command not found**
+```bash
+# Reload environment
+source "$HOME/Library/Application Support/org.dfinity.dfx/env"
+```
+
+**2. .did file doesn't exist**
+```bash
+# Clean build
+dfx build --clean
+```
+
+**3. Insufficient cycles**
+```bash
+# Check balance
+dfx wallet balance --network ic
+
+# Top up with more ICP
+dfx cycles convert --amount 0.1 --network ic
+```
+
+**4. Canister not found**
+```bash
+# Create canisters first
+dfx canister create --all
+dfx build
+dfx deploy
+```
+
+## Resources
+
+- [Internet Computer Documentation](https://internetcomputer.org/docs)
+- [Motoko Programming Language](https://internetcomputer.org/docs/current/motoko/main/motoko)
+- [DFX Command Reference](https://internetcomputer.org/docs/current/references/cli-reference/dfx-parent)
+- [ICRC-1 Token Standard](https://github.com/dfinity/ICRC-1)
+
+## Security Notes
+
+- Use password-protected identities for mainnet
+- Keep your seed phrase secure
+- Test thoroughly on local network before mainnet deployment
+- Monitor cycles usage to prevent canister freezing
 
 ## License
 
 This project is licensed under the MIT License.
-
-# ICP Token Project (ckIdr and CkUsd)
-
-This project implements two tokenization canisters on Internet Computer Protocol (ICP) - ckIdr and CkUsd - that can interact with a Motoko backend for transactions.
-
-## Project Overview
-
-The project consists of three main canisters:
-
-1. **CkIDr**: A token canister implementing the ckIdr token
-2. **CkUsd**: A token canister implementing the CkUsd token 
-3. **token_manager**: A manager canister that coordinates interactions between tokens
-
-## Features
-
-- **Token Features**:
-  - Minting and burning tokens (owner-only)
-  - Token transfers between accounts
-  - Balance tracking
-  - Transaction history
-
-- **Token Manager Features**:
-  - Centralized token management
-  - Account balance queries across tokens
-  - Access control (owner-only operations)
-
-## Getting Started
-
-### Prerequisites
-
-- [DFINITY Canister SDK](https://sdk.dfinity.org/docs/quickstart/local-quickstart.html)
-- [Node.js](https://nodejs.org/) (>= 14.x)
-
-### Installation
-
-1. Clone the repository
-2. Install dependencies:
-
-```bash
-npm install
-```
-
-### Deployment
-
-To deploy the canisters locally:
-
-```bash
-dfx start --background
-dfx deploy
-```
-
-### Initialization
-
-After deployment, you need to initialize the token manager with the canister IDs:
-
-```bash
-dfx canister call token_manager initializeTokens "(principal \"$(dfx canister id CkIDr)\", principal \"$(dfx canister id CkUsd)\", principal \"$(dfx identity get-principal)\")"
-```
-
-## Usage Examples
-
-### Checking Token Info
-
-```bash
-dfx canister call token_manager getTokenInfo "(\"CkIDr\")"
-dfx canister call token_manager getAllTokensInfo
-```
-
-### Minting Tokens (Owner Only)
-
-```bash
-dfx canister call token_manager mint "(\"CkIDr\", principal \"YOUR_PRINCIPAL\", 1000000)"
-```
-
-### Checking Balances
-
-```bash
-dfx canister call token_manager getBalance "(principal \"YOUR_PRINCIPAL\", \"CkIDr\")"
-dfx canister call token_manager getAllBalances "(principal \"YOUR_PRINCIPAL\")"
-```
-
-### Transferring Tokens
-
-Regular transfer (from caller to recipient):
-```bash
-dfx canister call CkIDr transfer "(record { to = principal \"RECIPIENT_PRINCIPAL\"; amount = 10000; memo = null })"
-```
-
-Owner transfer (can transfer from any account):
-```bash
-dfx canister call token_manager ownerTransfer "(\"CkIDr\", principal \"FROM_PRINCIPAL\", principal \"TO_PRINCIPAL\", 10000)"
-```
-
-## Architecture
-
-Each token canister is an instance of the same Token class, but with different initialization parameters. The token manager coordinates interactions between these tokens.
-
-### Security Features
-
-- Only the owner can mint or burn tokens
-- Only the owner can perform transfers on behalf of other accounts
-- Transaction history is maintained for all operations
-
-# `zap-x-icp`
-
-Welcome to your new `zap-x-icp` project and to the Internet Computer development community. By default, creating a new project adds this README and some template files to your project directory. You can edit these template files to customize your project and to include your own code to speed up the development cycle.
-
-To get started, you might want to explore the project directory structure and the default configuration file. Working with this project in your development environment will not affect any production deployment or identity tokens.
-
-To learn more before you start working with `zap-x-icp`, see the following documentation available online:
-
-- [Quick Start](https://internetcomputer.org/docs/current/developer-docs/setup/deploy-locally)
-- [SDK Developer Tools](https://internetcomputer.org/docs/current/developer-docs/setup/install)
-- [Motoko Programming Language Guide](https://internetcomputer.org/docs/current/motoko/main/motoko)
-- [Motoko Language Quick Reference](https://internetcomputer.org/docs/current/motoko/main/language-manual)
-
-If you want to start working on your project right away, you might want to try the following commands:
-
-```bash
-cd zap-x-icp/
-dfx help
-dfx canister --help
-```
-
-## Running the project locally
-
-If you want to test your project locally, you can use the following commands:
-
-```bash
-# Starts the replica, running in the background
-dfx start --background
-
-# Deploys your canisters to the replica and generates your candid interface
-dfx deploy
-```
-
-Once the job completes, your application will be available at `http://localhost:4943?canisterId={asset_canister_id}`.
-
-If you have made changes to your backend canister, you can generate a new candid interface with
-
-```bash
-npm run generate
-```
-
-at any time. This is recommended before starting the frontend development server, and will be run automatically any time you run `dfx deploy`.
-
-If you are making frontend changes, you can start a development server with
-
-```bash
-npm start
-```
-
-Which will start a server at `http://localhost:8080`, proxying API requests to the replica at port 4943.
-
-### Note on frontend environment variables
-
-If you are hosting frontend code somewhere without using DFX, you may need to make one of the following adjustments to ensure your project does not fetch the root key in production:
-
-- set`DFX_NETWORK` to `ic` if you are using Webpack
-- use your own preferred method to replace `process.env.DFX_NETWORK` in the autogenerated declarations
-  - Setting `canisters -> {asset_canister_id} -> declarations -> env_override to a string` in `dfx.json` will replace `process.env.DFX_NETWORK` with the string in the autogenerated declarations
-- Write your own `createActor` constructor
-# savr-icp-be

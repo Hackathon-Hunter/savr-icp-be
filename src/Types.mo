@@ -1,9 +1,9 @@
 import Principal "mo:base/Principal";
 import Nat "mo:base/Nat";
 import Text "mo:base/Text";
-import Time "mo:base/Time";
 import Blob "mo:base/Blob";
 import Nat64 "mo:base/Nat64";
+import Float "mo:base/Float";
 
 module {
     // ===== ICRC-1 Standard Types =====
@@ -101,6 +101,10 @@ module {
     public type TransactionType = {
         #Saving;
         #TopUp;
+        #Withdrawal;
+        #Staking;
+        #Unstaking;
+        #StakingReward;
     };
 
     public type Transaction = {
@@ -114,6 +118,63 @@ module {
         savingId : ?SavingId;
         memo : ?Text;
         blockIndex : ?Nat64; // ICP ledger block index
+    };
+
+    // ===== Staking Types =====
+    public type NeuronState = {
+        #Locked;
+        #Dissolving;
+        #Dissolved;
+    };
+
+    public type StakingInfo = {
+        neuronId : Nat64;
+        stake : Nat64; // Amount staked in e8s
+        maturity : Nat64; // Accumulated rewards in e8s
+        age : Int; // Age of the neuron in nanoseconds
+        state : NeuronState;
+        dissolveDelay : Nat64; // Dissolve delay in seconds
+        votingPower : Nat64; // Voting power
+        createdAt : Int; // Creation timestamp
+        lastRewardClaim : Int; // Last reward claim timestamp
+        expectedAPY : Float; // Expected annual percentage yield
+    };
+
+    public type StakeICPRequest = {
+        principalId : Text;
+        savingId : SavingId;
+        amount : Nat64; // Amount to stake in e8s
+        dissolveDelay : Nat64; // Dissolve delay in seconds
+    };
+
+    public type StakeICPResponse = {
+        neuronId : Nat64;
+        stake : Nat64;
+        dissolveDelay : Nat64;
+        expectedRewards : Nat64;
+    };
+
+    public type UnstakeRequest = {
+        principalId : Text;
+        savingId : SavingId;
+        neuronId : Nat64;
+    };
+
+    public type StakingRewards = {
+        totalRewards : Nat64;
+        annualizedReturn : Float;
+        lastRewardDate : Int;
+        pendingRewards : Nat64;
+    };
+
+    public type StakeResponse = {
+        #Ok : StakeICPResponse;
+        #Err : Text;
+    };
+
+    public type UnstakeResponse = {
+        #Ok : Bool;
+        #Err : Text;
     };
 
     // ===== Request Types =====
@@ -176,4 +237,8 @@ module {
     public type SavingResponse = Result<Saving, Text>;
     public type TransactionResponse = Result<Transaction, Text>;
     public type SavingWithHistoryResponse = Result<SavingWithHistory, Text>;
+
+
+    
+
 };
