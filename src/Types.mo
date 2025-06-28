@@ -47,7 +47,7 @@ module {
         amount : ICP;
         fee : ICP;
         from_subaccount : ?Blob;
-        to : Text;
+        to : Blob;  // ✅ Fixed: Changed from Text to Blob (account ID)
         created_at_time : ?{ timestamp_nanos : Nat64 };
     };
 
