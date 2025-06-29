@@ -105,6 +105,7 @@ module {
         #Staking;
         #Unstaking;
         #StakingReward;
+        #Deposit; // User deposits to canister
     };
 
     public type Transaction = {

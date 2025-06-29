@@ -102,6 +102,11 @@ shared (init_msg) actor class SavingManager() = this {
     private stable var stakingInfoEntries : [(SavingId, StakingInfo)] = [];
     private stable var neuronToSavingEntries : [(Nat64, SavingId)] = [];
 
+    // ===== Mock Balance System =====
+    private stable var mockBalanceEnabled : Bool = true; // Set to false for production
+    private stable var mockBalances : [(Principal, Nat64)] = []; // Virtual ICP balances
+    private var mockBalanceMap = HashMap.fromIter<Principal, Nat64>(mockBalances.vals(), 10, Principal.equal, Principal.hash);
+
     // ===== Helper Functions =====
     private func isOwner(principal : Principal) : Bool {
         principal == owner;
@@ -152,6 +157,7 @@ shared (init_msg) actor class SavingManager() = this {
         userSavingEntries := Iter.toArray(userSavings.entries());
         stakingInfoEntries := Iter.toArray(stakingInfo.entries());
         neuronToSavingEntries := Iter.toArray(neuronToSaving.entries());
+        mockBalances := Iter.toArray(mockBalanceMap.entries());
     };
 
     system func postupgrade() {
@@ -161,12 +167,14 @@ shared (init_msg) actor class SavingManager() = this {
         userSavings := HashMap.fromIter<Principal, [SavingId]>(userSavingEntries.vals(), userSavingEntries.size(), Principal.equal, Principal.hash);
         stakingInfo := HashMap.fromIter<SavingId, StakingInfo>(stakingInfoEntries.vals(), stakingInfoEntries.size(), Nat.equal, Hash.hash);
         neuronToSaving := HashMap.fromIter<Nat64, SavingId>(neuronToSavingEntries.vals(), neuronToSavingEntries.size(), Nat64.equal, func(x : Nat64) : Hash.Hash { Hash.hash(Nat64.toNat(x)) });
+        mockBalanceMap := HashMap.fromIter<Principal, Nat64>(mockBalances.vals(), mockBalances.size(), Principal.equal, Principal.hash);
 
         savingEntries := [];
         transactionEntries := [];
         userSavingEntries := [];
         stakingInfoEntries := [];
         neuronToSavingEntries := [];
+        mockBalances := [];
     };
 
     // ===== Automated Staking Reward Distribution =====
@@ -523,6 +531,68 @@ shared (init_msg) actor class SavingManager() = this {
     };
 
     // ===== Public API: Update Functions =====
+    
+    // Step 1: User deposits ICP to canister account
+    public shared (msg) func depositToCanister(amount : Nat64) : async TransactionResponse {
+        if (not Utils.isValidAmount(amount)) {
+            return #Err("Invalid amount: must be greater than 0");
+        };
+
+        let fee = Utils.STANDARD_ICP_FEE;
+        if (amount <= fee) {
+            return #Err("Amount must be greater than transaction fee: " # Nat64.toText(fee) # " e8s");
+        };
+
+        let caller = msg.caller;
+        let canisterAccountBlob = Utils.principalToAccountBlob(Principal.fromActor(this));
+        
+        let transferArgs : ICPTransferArgs = {
+            memo = Nat64.fromNat(nextTransactionId);
+            amount = { e8s = amount };
+            fee = { e8s = fee };
+            from_subaccount = null;
+            to = canisterAccountBlob;
+            created_at_time = null;
+        };
+
+        let transferResult = await icpLedger.transfer(transferArgs);
+        
+        switch (transferResult) {
+            case (#Err(transferError)) {
+                let errorMsg = switch (transferError) {
+                    case (#BadFee { expected_fee }) { "Bad fee. Expected: " # Nat64.toText(expected_fee.e8s) # " e8s" };
+                    case (#InsufficientFunds { balance }) { "Insufficient funds. Balance: " # Nat64.toText(balance.e8s) # " e8s" };
+                    case (#TxTooOld { allowed_window_nanos }) { "Transaction too old. Window: " # Nat64.toText(allowed_window_nanos) # " ns" };
+                    case (#TxCreatedInFuture) { "Transaction created in future" };
+                    case (#TxDuplicate { duplicate_of }) { "Duplicate transaction: " # Nat64.toText(duplicate_of) };
+                };
+                return #Err("Deposit to canister failed: " # errorMsg);
+            };
+            case (#Ok(blockIndex)) {
+                let now = Time.now();
+                let actualAmount = amount - fee;
+                let txId = nextTransactionId;
+                nextTransactionId += 1;
+
+                let transaction : Transaction = {
+                    id = txId;
+                    from = caller;
+                    to = Principal.fromActor(this);
+                    amount = actualAmount;
+                    timestamp = now;
+                    status = #Completed;
+                    transactionType = #Deposit;
+                    savingId = null;
+                    memo = ?("Deposit to canister (Fee: " # Nat64.toText(fee) # " e8s)");
+                    blockIndex = ?blockIndex;
+                };
+
+                transactions.put(txId, transaction);
+                #Ok(transaction);
+            };
+        };
+    };
+
     public shared (msg) func startSaving(request : StartSavingRequest) : async SavingResponse {
         if (not Utils.isValidAmount(request.amount)) {
             return #Err("Invalid amount: must be greater than 0");
@@ -541,7 +611,13 @@ shared (init_msg) actor class SavingManager() = this {
 
         let actualAmount = request.amount - fee;
 
-        // Perform actual ICP transfer to owner
+        // Check if canister has sufficient balance for the transfer
+        let canisterBalance = await getBalance();
+        if (canisterBalance < request.amount) {
+            return #Err("Insufficient canister balance. Please deposit " # Nat64.toText(request.amount) # " e8s to canister first using depositToCanister(). Current balance: " # Nat64.toText(canisterBalance) # " e8s");
+        };
+
+        // Perform actual ICP transfer from canister to owner
         let ownerAccountBlob = Utils.principalToAccountBlob(owner);
         
         let transferArgs : ICPTransferArgs = {
@@ -549,7 +625,7 @@ shared (init_msg) actor class SavingManager() = this {
             amount = { e8s = request.amount };
             fee = { e8s = fee };
             from_subaccount = null;
-            to = ownerAccountBlob;  // ✅ Fixed: Use raw Blob instead of hex Text
+            to = ownerAccountBlob;
             created_at_time = null;
         };
 
@@ -560,7 +636,7 @@ shared (init_msg) actor class SavingManager() = this {
                 // Transfer failed, return error
                 let errorMsg = switch (transferError) {
                     case (#BadFee { expected_fee }) { "Bad fee. Expected: " # Nat64.toText(expected_fee.e8s) # " e8s" };
-                    case (#InsufficientFunds { balance }) { "Insufficient funds. Balance: " # Nat64.toText(balance.e8s) # " e8s" };
+                    case (#InsufficientFunds { balance }) { "Insufficient funds. Canister balance: " # Nat64.toText(balance.e8s) # " e8s. Please deposit more ICP first." };
                     case (#TxTooOld { allowed_window_nanos }) { "Transaction too old. Window: " # Nat64.toText(allowed_window_nanos) # " ns" };
                     case (#TxCreatedInFuture) { "Transaction created in future" };
                     case (#TxDuplicate { duplicate_of }) { "Duplicate transaction: " # Nat64.toText(duplicate_of) };
@@ -623,7 +699,6 @@ shared (init_msg) actor class SavingManager() = this {
                 transactions.put(txId, transaction);
                 addToUserSavings(userPrincipal, savingId);
 
-                // Debug.print("Created new saving with ID: " # Nat.toText(savingId) # " - Block: " # Nat64.toText(blockIndex)); // REMOVED: Saves ~10,000 cycles
                 #Ok(newSaving);
             };
         };
@@ -979,7 +1054,13 @@ shared (init_msg) actor class SavingManager() = this {
                     return #Err("Saving is not active");
                 };
 
-                // Perform actual ICP transfer to owner
+                // Check if canister has sufficient balance for the transfer
+                let canisterBalance = await getBalance();
+                if (canisterBalance < request.amount) {
+                    return #Err("Insufficient canister balance. Please deposit " # Nat64.toText(request.amount) # " e8s to canister first using depositToCanister(). Current balance: " # Nat64.toText(canisterBalance) # " e8s");
+                };
+
+                // Perform actual ICP transfer from canister to owner
                 let ownerAccountBlob = Utils.principalToAccountBlob(owner);
                 
                 let transferArgs : ICPTransferArgs = {
@@ -987,7 +1068,7 @@ shared (init_msg) actor class SavingManager() = this {
                     amount = { e8s = request.amount };
                     fee = { e8s = fee };
                     from_subaccount = null;
-                    to = ownerAccountBlob;  // ✅ Fixed: Use raw Blob instead of hex Text
+                    to = ownerAccountBlob;
                     created_at_time = null;
                 };
 
@@ -998,7 +1079,7 @@ shared (init_msg) actor class SavingManager() = this {
                         // Transfer failed, return error
                         let errorMsg = switch (transferError) {
                             case (#BadFee { expected_fee }) { "Bad fee. Expected: " # Nat64.toText(expected_fee.e8s) # " e8s" };
-                            case (#InsufficientFunds { balance }) { "Insufficient funds. Balance: " # Nat64.toText(balance.e8s) # " e8s" };
+                            case (#InsufficientFunds { balance }) { "Insufficient funds. Canister balance: " # Nat64.toText(balance.e8s) # " e8s. Please deposit more ICP first." };
                             case (#TxTooOld { allowed_window_nanos }) { "Transaction too old. Window: " # Nat64.toText(allowed_window_nanos) # " ns" };
                             case (#TxCreatedInFuture) { "Transaction created in future" };
                             case (#TxDuplicate { duplicate_of }) { "Duplicate transaction: " # Nat64.toText(duplicate_of) };
@@ -1048,7 +1129,6 @@ shared (init_msg) actor class SavingManager() = this {
                         savings.put(saving.id, updatedSaving);
                         transactions.put(txId, transaction);
 
-                        // Debug.print("Topped up saving with ID: " # Nat.toText(saving.id) # " - Block: " # Nat64.toText(blockIndex)); // REMOVED: Saves ~12,000 cycles
                         #Ok(transaction);
                     };
                 };
@@ -1367,4 +1447,473 @@ shared (init_msg) actor class SavingManager() = this {
         // Debug.print("Migrated " # Nat.toText(migratedCount) # " savings for staking support"); // REMOVED: Saves ~10,000 cycles
         true;
     };
+
+    // ===== ICRC-2 Direct Transfer Functions =====
+    
+    // Function for direct user-to-owner transfer using ICRC-2
+    public shared (msg) func topUpSavingDirect(request : TopUpRequest) : async TransactionResponse {
+        if (not Utils.isValidAmount(request.amount)) {
+            return #Err("Invalid amount: must be greater than 0");
+        };
+
+        let userPrincipal = Principal.fromText(request.principalId);
+        let fee = Utils.STANDARD_ICP_FEE;
+
+        if (request.amount <= fee) {
+            return #Err("Amount must be greater than transaction fee: " # Nat64.toText(fee) # " e8s");
+        };
+
+        let actualAmount = request.amount - fee;
+
+        switch (savings.get(request.savingId)) {
+            case (null) {
+                return #Err("Saving not found");
+            };
+            case (?saving) {
+                if (saving.status != #Active) {
+                    return #Err("Saving is not active");
+                };
+
+                // Direct transfer feature not yet implemented 
+                // This would require ICRC-2 approve/transferFrom pattern
+                return #Err("Direct transfer from user to owner is not yet supported. Please use the two-step process: 1) Deposit to canister using depositToCanister(), 2) Call topUpSaving(). Canister Account ID: c0c8b32d0a6163636f756e742d696400000000018022ff010100000000000000");
+            };
+        };
+    };
+
+    // Mock function to add test ICP to any user
+    public shared (msg) func mintTestICP(userPrincipal : Text, amount : Nat64) : async Text {
+        if (not mockBalanceEnabled) {
+            return "Mock system disabled. Use real ICP transfers.";
+        };
+
+        let user = Principal.fromText(userPrincipal);
+        let currentBalance = switch (mockBalanceMap.get(user)) {
+            case (null) { 0 : Nat64 };
+            case (?balance) { balance };
+        };
+        
+        let newBalance = currentBalance + amount;
+        mockBalanceMap.put(user, newBalance);
+        
+        "Minted " # Nat64.toText(amount) # " e8s test ICP for " # userPrincipal # ". New balance: " # Nat64.toText(newBalance) # " e8s";
+    };
+
+    // Mock function to get virtual balance
+    public query func getMockBalance(userPrincipal : Text) : async Nat64 {
+        let user = Principal.fromText(userPrincipal);
+        switch (mockBalanceMap.get(user)) {
+            case (null) { 0 : Nat64 };
+            case (?balance) { balance };
+        };
+    };
+
+    // Mock transfer function that deducts virtual balance
+    private func mockTransfer(from : Principal, to : Principal, amount : Nat64) : Bool {
+        let fromBalance = switch (mockBalanceMap.get(from)) {
+            case (null) { 0 : Nat64 };
+            case (?balance) { balance };
+        };
+
+        if (fromBalance < amount) {
+            return false; // Insufficient funds
+        };
+
+        // Deduct from sender
+        mockBalanceMap.put(from, fromBalance - amount);
+
+        // Add to receiver (optional - owner doesn't need virtual balance tracking)
+        let toBalance = switch (mockBalanceMap.get(to)) {
+            case (null) { 0 : Nat64 };
+            case (?balance) { balance };
+        };
+        mockBalanceMap.put(to, toBalance + amount);
+
+        true; // Success
+    };
+
+    // Enhanced topUpSaving with mock support
+    public shared (msg) func topUpSavingMock(request : TopUpRequest) : async TransactionResponse {
+        if (not Utils.isValidAmount(request.amount)) {
+            return #Err("Invalid amount: must be greater than 0");
+        };
+
+        let userPrincipal = Principal.fromText(request.principalId);
+        let fee = Utils.STANDARD_ICP_FEE;
+
+        if (request.amount <= fee) {
+            return #Err("Amount must be greater than transaction fee: " # Nat64.toText(fee) # " e8s");
+        };
+
+        let actualAmount = request.amount - fee;
+
+        switch (savings.get(request.savingId)) {
+            case (null) {
+                return #Err("Saving not found");
+            };
+            case (?saving) {
+                if (saving.status != #Active) {
+                    return #Err("Saving is not active");
+                };
+
+                if (mockBalanceEnabled) {
+                    // Use mock balance system
+                    let userMockBalance = switch (mockBalanceMap.get(userPrincipal)) {
+                        case (null) { 0 : Nat64 };
+                        case (?balance) { balance };
+                    };
+
+                    if (userMockBalance < request.amount) {
+                        return #Err("Insufficient mock balance. User balance: " # Nat64.toText(userMockBalance) # " e8s. Use mintTestICP() to add test funds.");
+                    };
+
+                    // Perform mock transfer (deduct from user virtual balance)
+                    let transferSuccess = mockTransfer(userPrincipal, owner, request.amount);
+                    
+                    if (not transferSuccess) {
+                        return #Err("Mock transfer failed: insufficient funds");
+                    };
+
+                    // Create successful transaction record
+                    let now = Time.now();
+                    let newCurrentAmount = saving.currentAmount + actualAmount;
+                    let newStatus = if (newCurrentAmount >= saving.totalSaving) {
+                        #Completed;
+                    } else { #Active };
+
+                    let updatedSaving : Saving = {
+                        id = saving.id;
+                        principalId = saving.principalId;
+                        savingName = saving.savingName;
+                        amount = saving.amount;
+                        totalSaving = saving.totalSaving;
+                        currentAmount = newCurrentAmount;
+                        deadline = saving.deadline;
+                        createdAt = saving.createdAt;
+                        updatedAt = now;
+                        status = newStatus;
+                        savingsRate = saving.savingsRate;
+                        priorityLevel = saving.priorityLevel;
+                        isStaking = saving.isStaking;
+                    };
+
+                    let txId = nextTransactionId;
+                    nextTransactionId += 1;
+
+                    let transaction : Transaction = {
+                        id = txId;
+                        from = userPrincipal;
+                        to = owner;
+                        amount = actualAmount;
+                        timestamp = now;
+                        status = #Completed;
+                        transactionType = #TopUp;
+                        savingId = ?saving.id;
+                        memo = ?("Mock top up for: " # saving.savingName # " (Fee: " # Nat64.toText(fee) # " e8s)");
+                        blockIndex = ?999999999; // Mock block index
+                    };
+
+                    savings.put(saving.id, updatedSaving);
+                    transactions.put(txId, transaction);
+
+                    #Ok(transaction);
+                } else {
+                    // Use real ICP transfer (original two-step process)
+                    let canisterBalance = await getBalance();
+                    if (canisterBalance < request.amount) {
+                        return #Err("Insufficient canister balance. Please deposit " # Nat64.toText(request.amount) # " e8s to canister first using depositToCanister(). Current balance: " # Nat64.toText(canisterBalance) # " e8s");
+                    };
+
+                    let ownerAccountBlob = Utils.principalToAccountBlob(owner);
+                    
+                    let transferArgs : ICPTransferArgs = {
+                        memo = Nat64.fromNat(nextTransactionId);
+                        amount = { e8s = request.amount };
+                        fee = { e8s = fee };
+                        from_subaccount = null;
+                        to = ownerAccountBlob;
+                        created_at_time = null;
+                    };
+
+                    let transferResult = await icpLedger.transfer(transferArgs);
+                    
+                    switch (transferResult) {
+                        case (#Err(transferError)) {
+                            let errorMsg = switch (transferError) {
+                                case (#BadFee { expected_fee }) { "Bad fee. Expected: " # Nat64.toText(expected_fee.e8s) # " e8s" };
+                                case (#InsufficientFunds { balance }) { "Insufficient funds. Canister balance: " # Nat64.toText(balance.e8s) # " e8s. Please deposit more ICP first." };
+                                case (#TxTooOld { allowed_window_nanos }) { "Transaction too old. Window: " # Nat64.toText(allowed_window_nanos) # " ns" };
+                                case (#TxCreatedInFuture) { "Transaction created in future" };
+                                case (#TxDuplicate { duplicate_of }) { "Duplicate transaction: " # Nat64.toText(duplicate_of) };
+                            };
+                            return #Err("ICP transfer failed: " # errorMsg);
+                        };
+                        case (#Ok(blockIndex)) {
+                            let now = Time.now();
+                            let newCurrentAmount = saving.currentAmount + actualAmount;
+                            let newStatus = if (newCurrentAmount >= saving.totalSaving) {
+                                #Completed;
+                            } else { #Active };
+
+                            let updatedSaving : Saving = {
+                                id = saving.id;
+                                principalId = saving.principalId;
+                                savingName = saving.savingName;
+                                amount = saving.amount;
+                                totalSaving = saving.totalSaving;
+                                currentAmount = newCurrentAmount;
+                                deadline = saving.deadline;
+                                createdAt = saving.createdAt;
+                                updatedAt = now;
+                                status = newStatus;
+                                savingsRate = saving.savingsRate;
+                                priorityLevel = saving.priorityLevel;
+                                isStaking = saving.isStaking;
+                            };
+
+                            let txId = nextTransactionId;
+                            nextTransactionId += 1;
+
+                            let transaction : Transaction = {
+                                id = txId;
+                                from = userPrincipal;
+                                to = owner;
+                                amount = actualAmount;
+                                timestamp = now;
+                                status = #Completed;
+                                transactionType = #TopUp;
+                                savingId = ?saving.id;
+                                memo = ?("Top up for: " # saving.savingName # " (Fee: " # Nat64.toText(fee) # " e8s)");
+                                blockIndex = ?blockIndex;
+                            };
+
+                            savings.put(saving.id, updatedSaving);
+                            transactions.put(txId, transaction);
+
+                            #Ok(transaction);
+                        };
+                    };
+                };
+            };
+        };
+    };
+
+    // Function to toggle mock mode
+    public shared (msg) func setMockMode(enabled : Bool) : async Text {
+        if (not isOwner(msg.caller)) {
+            return "Only owner can toggle mock mode";
+        };
+        
+        mockBalanceEnabled := enabled;
+        if (enabled) {
+            "Mock balance system enabled. Use mintTestICP() and topUpSavingMock() for testing.";
+        } else {
+            "Mock balance system disabled. Using real ICP transfers.";
+        };
+    };
+
+    public query func getMockMode() : async Bool {
+        mockBalanceEnabled;
+    };
+
+    // Mock version of startSaving that uses virtual balances
+    public shared (msg) func startSavingMock(request : StartSavingRequest) : async SavingResponse {
+        if (not Utils.isValidAmount(request.amount)) {
+            return #Err("Invalid amount: must be greater than 0");
+        };
+
+        if (request.savingName == "") {
+            return #Err("Invalid saving name: cannot be empty");
+        };
+
+        if (not Utils.isValidDeadline(request.deadline)) {
+            return #Err("Invalid deadline: must be in the future");
+        };
+
+        let userPrincipal = Principal.fromText(request.principalId);
+        let fee = Utils.STANDARD_ICP_FEE;
+
+        if (request.amount <= fee) {
+            return #Err("Amount must be greater than transaction fee: " # Nat64.toText(fee) # " e8s");
+        };
+
+        let actualAmount = request.amount - fee;
+
+        if (mockBalanceEnabled) {
+            // Use mock balance system
+            let userMockBalance = switch (mockBalanceMap.get(userPrincipal)) {
+                case (null) { 0 : Nat64 };
+                case (?balance) { balance };
+            };
+
+            if (userMockBalance < request.amount) {
+                return #Err("Insufficient mock balance. User balance: " # Nat64.toText(userMockBalance) # " e8s. Use mintTestICP() to add test funds.");
+            };
+
+            // Perform mock transfer (deduct from user virtual balance)
+            let transferSuccess = mockTransfer(userPrincipal, owner, request.amount);
+            
+            if (not transferSuccess) {
+                return #Err("Mock transfer failed: insufficient funds");
+            };
+
+            // Create saving record
+            let savingId = nextSavingId;
+            nextSavingId += 1;
+
+            let now = Time.now();
+            let savingsRate = switch (request.savingsRate) {
+                case (null) { 5 };
+                case (?rate) { rate };
+            };
+            let priorityLevel = switch (request.priorityLevel) {
+                case (null) { 1 };
+                case (?level) { level };
+            };
+            let isStaking = switch (request.isStaking) {
+                case (null) { false };
+                case (?staking) { staking };
+            };
+
+            // Determine status: if initial amount >= target, mark as completed
+            let status = if (actualAmount >= request.totalSaving) {
+                #Completed;
+            } else { #Active };
+
+            let newSaving : Saving = {
+                id = savingId;
+                principalId = userPrincipal;
+                savingName = request.savingName;
+                amount = request.amount;
+                totalSaving = request.totalSaving;
+                currentAmount = actualAmount;
+                deadline = request.deadline;
+                createdAt = now;
+                updatedAt = now;
+                status = status;
+                savingsRate = savingsRate;
+                priorityLevel = priorityLevel;
+                isStaking = isStaking;
+            };
+
+            // Create transaction record
+            let transactionId = nextTransactionId;
+            nextTransactionId += 1;
+
+            let transaction : Transaction = {
+                id = transactionId;
+                from = userPrincipal;
+                to = owner;
+                amount = actualAmount;
+                timestamp = now;
+                status = #Completed;
+                transactionType = #Saving;
+                savingId = ?savingId;
+                memo = ?("Mock initial saving: " # request.savingName # " (Fee: " # Nat64.toText(fee) # " e8s)");
+                blockIndex = ?999999999; // Mock block index
+            };
+
+            // Store records
+            savings.put(savingId, newSaving);
+            transactions.put(transactionId, transaction);
+
+            // Add to user savings list
+            addToUserSavings(userPrincipal, savingId);
+
+            #Ok(newSaving);
+        } else {
+            // Use real ICP transfer (original two-step process)
+            let canisterBalance = await getBalance();
+            if (canisterBalance < request.amount) {
+                return #Err("Insufficient canister balance. Please deposit " # Nat64.toText(request.amount) # " e8s to canister first using depositToCanister(). Current balance: " # Nat64.toText(canisterBalance) # " e8s");
+            };
+
+            let ownerAccountBlob = Utils.principalToAccountBlob(owner);
+            
+            let transferArgs : ICPTransferArgs = {
+                memo = Nat64.fromNat(nextTransactionId);
+                amount = { e8s = request.amount };
+                fee = { e8s = fee };
+                from_subaccount = null;
+                to = ownerAccountBlob;
+                created_at_time = null;
+            };
+
+            let transferResult = await icpLedger.transfer(transferArgs);
+            
+            switch (transferResult) {
+                case (#Err(transferError)) {
+                    let errorMsg = switch (transferError) {
+                        case (#BadFee { expected_fee }) { "Bad fee. Expected: " # Nat64.toText(expected_fee.e8s) # " e8s" };
+                        case (#InsufficientFunds { balance }) { "Insufficient funds. Canister balance: " # Nat64.toText(balance.e8s) # " e8s. Please deposit more ICP first." };
+                        case (#TxTooOld { allowed_window_nanos }) { "Transaction too old. Window: " # Nat64.toText(allowed_window_nanos) # " ns" };
+                        case (#TxCreatedInFuture) { "Transaction created in future" };
+                        case (#TxDuplicate { duplicate_of }) { "Duplicate transaction: " # Nat64.toText(duplicate_of) };
+                    };
+                    return #Err("ICP transfer failed: " # errorMsg);
+                };
+                case (#Ok(blockIndex)) {
+                    let savingId = nextSavingId;
+                    nextSavingId += 1;
+
+                    let now = Time.now();
+                    let savingsRate = switch (request.savingsRate) {
+                        case (null) { 5 };
+                        case (?rate) { rate };
+                    };
+                    let priorityLevel = switch (request.priorityLevel) {
+                        case (null) { 1 };
+                        case (?level) { level };
+                    };
+                    let isStaking = switch (request.isStaking) {
+                        case (null) { false };
+                        case (?staking) { staking };
+                    };
+
+                    let status = if (actualAmount >= request.totalSaving) {
+                        #Completed;
+                    } else { #Active };
+
+                    let newSaving : Saving = {
+                        id = savingId;
+                        principalId = userPrincipal;
+                        savingName = request.savingName;
+                        amount = request.amount;
+                        totalSaving = request.totalSaving;
+                        currentAmount = actualAmount;
+                        deadline = request.deadline;
+                        createdAt = now;
+                        updatedAt = now;
+                        status = status;
+                        savingsRate = savingsRate;
+                        priorityLevel = priorityLevel;
+                        isStaking = isStaking;
+                    };
+
+                    let transactionId = nextTransactionId;
+                    nextTransactionId += 1;
+
+                    let transaction : Transaction = {
+                        id = transactionId;
+                        from = userPrincipal;
+                        to = owner;
+                        amount = actualAmount;
+                        timestamp = now;
+                        status = #Completed;
+                        transactionType = #Saving;
+                        savingId = ?savingId;
+                        memo = ?("Mock initial saving: " # request.savingName # " (Fee: " # Nat64.toText(fee) # " e8s)");
+                        blockIndex = ?999999999; // Mock block index
+                    };
+
+                    savings.put(savingId, newSaving);
+                    transactions.put(transactionId, transaction);
+                    addToUserSavings(userPrincipal, savingId);
+
+                    #Ok(newSaving);
+                };
+            };
+        };
+    };
+
 };
